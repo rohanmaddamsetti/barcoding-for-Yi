@@ -112,30 +112,6 @@ function WriteClustersToFile(clusters_per_sample, outfile)
 end
 
 
-function parse_commandline()
-    s = ArgParseSettings()
-    @add_arg_table s begin
-        "barcode_read_csv_path"
-        help = "csv file of barcoded reads and raw counts."
-        arg_type = String
-        required = true
-        "max_mismatches"
-        help = "maximum number of mismatches allowed during clustering"
-        arg_type = Int64
-        default = 10
-        "--reference_fasta_paths", "-r"
-        help = "reference fasta files, for finding CRISPR spacer source."
-        nargs = '+'
-        arg_type = String
-        "--outfile", "-o"
-        help = "outfile for the clustered reads. default is merged_barcode_reads.csv."
-        arg_type = String
-        default = "../results/merged_barcode_reads.csv"
-    end
-    return parse_args(s)
-end
-
-
 function get_CRISPR_spacer(readseq, CRISPR_repeat, affinegap, length_to_trim = 95)
     """
     Assumed structure of barcode reads
@@ -158,25 +134,67 @@ function get_CRISPR_spacer(readseq, CRISPR_repeat, affinegap, length_to_trim = 9
 end
 
 
+function GetPairwiseAlignmentSeqStart(aln)
+    seq = aln.a.seq
+    anchors = aln.a.aln.anchors
+
+    for 
+    
+    seqpos = anchors[1].seqpos
+    
+seq = aln.a.seq
+    ref = aln.b
+    anchors = aln.a.aln.anchors
+    # width of position numbers
+    posw = ndigits(max(anchors[end].seqpos, anchors[end].refpos)) + 1
+
+    i = 0
+
+    refpos = anchors[1].refpos
+
 function AlignClustersToRefSeq(clusters_per_sample, refseq, affinegap, CRISPR_repeat)
 
     for (sample, clusters) in enumerate(clusters_per_sample)
         for cluster in clusters
-            line = string(sample) * "," * string(cluster.ref) * "," * string(cluster.counts)
-            println(line)
-
-
             matched_reference = false
 
             spacer = get_CRISPR_spacer(cluster.ref, CRISPR_repeat, affinegap)
-            res = pairalign(LocalAlignment(), refseq, spacer, affinegap)
-            aln = alignment(res)    
+            res = pairalign(LocalAlignment(), spacer, refseq, affinegap)
+            aln = alignment(res)
             println(aln)
-            exit()
+
+
+            println(first(aln.anchors).seqpos)
+            last(aln.anchors).seqpos)
+            first(aln.anchors).refpos, '-', last(aln.anchors).refpos)
             
         end
     end
     
+end
+
+
+function parse_commandline()
+    s = ArgParseSettings()
+    @add_arg_table s begin
+        "barcode_read_csv_path"
+        help = "csv file of barcoded reads and raw counts."
+        arg_type = String
+        required = true
+        "max_mismatches"
+        help = "maximum number of mismatches allowed during clustering"
+        arg_type = Int64
+        default = 10
+        "--reference_fasta_paths", "-r"
+        help = "reference fasta files, for finding CRISPR spacer source."
+        nargs = '+'
+        arg_type = String
+        "--outfile", "-o"
+        help = "outfile for the clustered reads. default is merged_barcode_reads.csv."
+        arg_type = String
+        default = "../results/merged_barcode_reads.csv"
+    end
+    return parse_args(s)
 end
 
 
