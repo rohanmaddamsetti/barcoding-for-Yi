@@ -98,6 +98,73 @@ function ClusterReads(illumina_reads_path, max_mismatches, affinegap)
 end
 
 
+function get_CRISPR_spacer(readseq, CRISPR_repeat, affinegap, length_to_trim = 95, max_CRISPR_mismatches = 2)
+    """
+    Assumed structure of barcode reads
+    ==================================
+    Here is the structure of the sequencing data. The whole sequence is the primer, 
+    the first 24bp is the index, which should be removed. The next 74 bp is 5' sequence 
+    (it should be also constant among samples). Then the 29bp CRISPR repeat region is 
+    highly constant (gagttccccgcgccagcggggataaaccg), then followed with a 32bp spacer 
+    (the sequencing can only get the first 24bp, so all sequence after the CRISPR repeat 
+    can be used to find the spacer).
+    """
+    trimmed_read = readseq[length_to_trim:end]
+    ## align the trimmed read to the CRISPR repeat.
+    res = pairalign(GlobalAlignment(), trimmed_read, CRISPR_repeat, affinegap)
+    aln = alignment(res)
+    ## error checking: if the best alignment poorly matches the CRISPR repeat,
+    num_CRISPR_matches = count_matches(aln)
+    if (num_CRISPR_matches < (length(CRISPR_repeat) - max_CRISPR_mismatches))
+        spacer = "" ## then return an empty spacer string.
+    else
+        ## get the last position of the repeat; the spacer follows.
+        spacer_start = ref2seq(aln, lastindex(CRISPR_repeat))[1] + 1
+        spacer = trimmed_read[spacer_start:end]
+    end
+    return spacer
+end
+
+
+function GetPairwiseAlignmentSeqStart(pairaln::PairwiseAlignment)
+    return pairaln.a.aln.anchors[1].seqpos + 1
+end
+
+
+function GetPairwiseAlignmentRefStart(pairaln::PairwiseAlignment)
+    return pairaln.a.aln.anchors[1].refpos + 1
+end
+
+
+function GetPairwiseAlignmentSeqEnd(pairaln::PairwiseAlignment)
+    return pairaln.a.aln.anchors[end].seqpos
+end
+
+
+function GetPairwiseAlignmentRefEnd(pairaln::PairwiseAlignment)
+    return pairaln.a.aln.anchors[end].refpos
+end
+
+
+function AlignClusterToRefSeq(cluster, refseq, affinegap, CRISPR_repeat)
+    spacer = get_CRISPR_spacer(cluster.ref, CRISPR_repeat, affinegap)
+    ## error checking: if the CRISPR repeat does not exist in the
+    ## reference sequence, then an empty spacer is returned.
+    if (length(spacer) == 0) ## in the case of junk reads, return nonsense values.
+        refstart = -1
+        refend = -1
+        aln_score = -1
+    else
+        res = pairalign(LocalAlignment(), spacer, refseq, affinegap)
+        aln_score = score(res)
+        aln = alignment(res)            
+        refstart = GetPairwiseAlignmentRefStart(aln)
+        refend = GetPairwiseAlignmentRefEnd(aln)
+    end
+    return (spacer, refstart, refend, aln_score)
+end
+
+
 function WriteClustersToFile(clusters_per_sample, outfile)
     outfh = open(outfile, "w")
     header = "Sample,Sequence,Count"
@@ -112,65 +179,43 @@ function WriteClustersToFile(clusters_per_sample, outfile)
 end
 
 
-function get_CRISPR_spacer(readseq, CRISPR_repeat, affinegap, length_to_trim = 95)
-    """
-    Assumed structure of barcode reads
-    ==================================
-    Here is the structure of the sequencing data. The whole sequence is the primer, 
-    the first 24bp is the index, which should be removed. The next 74 bp is 5' sequence 
-    (it should be also constant among samples). Then the 29bp CRISPR repeat region is 
-    highly constant (gagttccccgcgccagcggggataaaccg), then followed with a 32bp spacer 
-    (the sequencing can only get the first 24bp, so all sequence after the CRISPR repeat 
-    can be used to find the spacer).
-    """
-    trimmed_read = readseq[length_to_trim:end]
-    ## align the trimmed read to the CRISPR repeat.
-    res = pairalign(GlobalAlignment(), trimmed_read, CRISPR_repeat, affinegap)
-    aln = alignment(res)    
-    ## get the last position of the repeat; the spacer follows.
-    spacer_start = ref2seq(aln, lastindex(CRISPR_repeat))[1] + 1
-    spacer = trimmed_read[spacer_start:end]
-    return spacer
-end
+function WriteAlignedClustersToFile(clusters_per_sample, reference_fasta_paths, affinegap, CRISPR_repeat, outfile, reference_alignment_threshold = 20)
+    outfh = open(outfile, "w")
+    header = "Sample,Sequence,Count,Spacer,Reference,ReferenceStart,ReferenceEnd,AlignmentScore"
+    println(outfh, header)
 
-
-function GetPairwiseAlignmentSeqStart(aln)
-    seq = aln.a.seq
-    anchors = aln.a.aln.anchors
-
-    for 
-    
-    seqpos = anchors[1].seqpos
-    
-seq = aln.a.seq
-    ref = aln.b
-    anchors = aln.a.aln.anchors
-    # width of position numbers
-    posw = ndigits(max(anchors[end].seqpos, anchors[end].refpos)) + 1
-
-    i = 0
-
-    refpos = anchors[1].refpos
-
-function AlignClustersToRefSeq(clusters_per_sample, refseq, affinegap, CRISPR_repeat)
-
-    for (sample, clusters) in enumerate(clusters_per_sample)
-        for cluster in clusters
-            matched_reference = false
-
-            spacer = get_CRISPR_spacer(cluster.ref, CRISPR_repeat, affinegap)
-            res = pairalign(LocalAlignment(), spacer, refseq, affinegap)
-            aln = alignment(res)
-            println(aln)
-
-
-            println(first(aln.anchors).seqpos)
-            last(aln.anchors).seqpos)
-            first(aln.anchors).refpos, '-', last(aln.anchors).refpos)
-            
+    ## align to each record in each fasta file. 
+    for ref_fasta_file in reference_fasta_paths
+        reader = open(FASTA.Reader, ref_fasta_file)
+        for record in reader
+            record_name = FASTA.identifier(record) * "_" * FASTA.description(record)
+            refseq = sequence(record)
+            ## now, align each read to the current reference.
+            for (sample, clusters) in enumerate(clusters_per_sample)
+                for cluster in clusters
+                    spacer, refstart, refend, aln_score = AlignClusterToRefSeq(cluster, refseq, affinegap, CRISPR_repeat)
+                    ## error handling.
+                    ## case 1: CRISPR repeat is not in the read.
+                    if (length(spacer) == 0)
+                        continue
+                    end
+                    ## case 2: score threshold for the alignment to reference is too low.
+                    if (aln_score < reference_alignment_threshold)
+                        continue
+                    end
+                    
+                    ## write the alignment data to file.
+                    fields = [string(sample), string(cluster.ref), string(cluster.counts), string(spacer), record_name, refstart, refend, aln_score]
+                    line = join(fields, ",")
+                    println(outfh, line)
+                end
+            end
         end
+        ## close the current reference FASTA file handle.
+        close(reader)
     end
-    
+    ## close the output file handle.
+    close(outfh)
 end
 
 
@@ -223,21 +268,15 @@ function main()
 
     ## cluster the reads.
     clusters_per_sample = ClusterReads(illumina_reads_path, max_mismatches, affinegap)
-    ## align the clusters to each reference FASTA sequence, if they exist.
 
-    for ref_fasta_file in reference_fasta_paths
-        reader = open(FASTA.Reader, ref_fasta_file)
-        for record in reader
-            refseq = sequence(record)
-            ## now, align each read to the current reference.
-            AlignClustersToRefSeq(clusters_per_sample, refseq, affinegap, CRISPR_repeat)
-        end
-        close(reader)
+    ## if reference fasta files have been supplied, then align and write to file.
+    if (length(reference_fasta_paths) > 0)
+        WriteAlignedClustersToFile(clusters_per_sample, reference_fasta_paths, affinegap, CRISPR_repeat, outfile)
+    else
+        ## otherwise, just write the clusters to file.
+        WriteClustersToFile(clusters_per_sample, outfile)
     end
-    
-    ## write the clusters to file.
-    ##WriteClustersToFile(clusters_per_sample, outfile)
-
+    ## end of the main function.
 end
 
 
