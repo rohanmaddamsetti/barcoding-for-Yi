@@ -43,11 +43,9 @@ Usage examples:
 ==================
 julia cluster-fastq-barcode-reads.jl ../data/third-test-data/
 
-julia cluster-barcode-reads.jl ../data/third-test-data/ -r ../data/ref-seqs/a27-c-orit-g8c1t-mcherry.fasta -o ../results/genewiz_forward_merged_barcodes.csv
+julia cluster-fastq-barcode-reads.jl ../data/third-test-data/ -r ../data/ref-seqs/a27-c-orit-g8c1t-mcherry.fasta -o ../results/genewiz_forward_merged_barcodes.csv
 
-julia cluster-barcode-reads.jl ../data/third-test-data/ -r ../data/ref-seqs/a27-c-orit-g8c1t-mcherry.fasta -o ../results/genewiz_forward_merged_barcodes.csv
-
-julia cluster-barcode-reads.jl ../data/2022-11-16-merged-data/ -r ../data/ref-seqs/a27-c-orit-g8c1t-mcherry.fasta ../data/ref-seqs/c16-c-a-train-mcherry.fasta -o ../results/merged_barcodes_2022-11-16.csv
+julia cluster-fastq-barcode-reads.jl ../data/2022-11-16-merged-data/ -r ../data/ref-seqs/a27-c-orit-g8c1t-mcherry.fasta ../data/ref-seqs/c16-c-a-train-mcherry.fasta -o ../results/merged_barcodes_2022-11-16.csv
 
 """
 
@@ -56,12 +54,12 @@ using DataFrames, DataFramesMeta, CSV, BioSequences, BioAlignments, FASTX, Codec
 
 mutable struct Cluster
     ## the most common sequence is set as the reference.
-    ref::LongDNASeq
+    ref::LongDNA{4}
     counts::Int64
 end
 
 
-function TrimAndCountReads(fastq_gz_reads_dir, length_to_trim = 188, length_to_keep = 32, full_length=250)
+function TrimAndCountAllReads(fastq_gz_reads_dir, fwd_length_to_trim = 188, rev_length_to_trim = 172, length_to_keep = 32, full_length=250)
     
     files_in_reads_dir = readdir(fastq_gz_reads_dir, join=true)
     fastq_gz_files = [x for x in files_in_reads_dir if endswith(x,".fastq.gz")]
@@ -71,13 +69,30 @@ function TrimAndCountReads(fastq_gz_reads_dir, length_to_trim = 188, length_to_k
     for fastq_gz_f in fastq_gz_files
         ## the name of the sample comes from the fastq.gz filename.
         sample = string(split(split(basename(fastq_gz_f),".fastq.gz")[1], "_")[1])
-
+        ## check the filename to check whether forward or reverse reads.
+        if occursin("_R1_001", basename(fastq_gz_f))
+            is_fwd = true
+            length_to_trim = fwd_length_to_trim
+        elseif occursin("_R2_001", basename(fastq_gz_f))
+            is_fwd = false
+            length_to_trim = rev_length_to_trim
+        else
+            error("Read name did not parse: unclear whether fwd or rev reads")
+        end
+        
         if !haskey(sample_to_sequence_count_dict, sample)
             sample_to_sequence_count_dict[sample] = Dict()
         end
 
         for record in FASTQ.Reader(GzipDecompressorStream(open(fastq_gz_f)))
-            my_seq = sequence(record)
+            my_seq = FASTQ.sequence(LongDNA{4}, record)
+            if ! is_fwd ## then take the reverse complement.
+                my_seq = reverse_complement(my_seq)
+            end
+            ## now convert my_seq to type String for easy use.
+            my_seq = String(my_seq)
+            
+                
             ## skip reads that are not full_length.
             if length(my_seq) < full_length
                 continue
@@ -106,15 +121,6 @@ function TrimAndCountReads(fastq_gz_reads_dir, length_to_trim = 188, length_to_k
 end
 
 
-##function TrimAndCountForwardReads(fastq_gz_reads_dir, length_to_trim = 188, length_to_keep = 32, full_length=250)
-##    return TrimAndCountReads(fastq_gz_reads_dir, length_to_trim = 188, length_to_keep = 32, full_length=250)
-
-
-##function TrimAndCountReverseReads(fastq_gz_reads_dir, length_to_trim = 188, length_to_keep = 32, full_length=250)
-##    return TrimAndCountReads(fastq_gz_reads_dir, length_to_trim = 188, length_to_keep = 32, full_length=250)
-
-
-
 function ClusterReads(illumina_reads_df, max_mismatches, affinegap)
     
     readlength = unique([length(x) for x in illumina_reads_df.Sequence])
@@ -134,7 +140,7 @@ function ClusterReads(illumina_reads_df, max_mismatches, affinegap)
         ## critical assumption: the sequences are read in sorted order,
         ## by the number of read counts.
         for (seq, count) in zip(sample_df.Sequence, sample_df.Count)
-            DNAseq = LongDNASeq(seq)
+            DNAseq = LongDNA{4}(seq)
             matched_cluster = false
             for cluster in clusters
                 res = pairalign(GlobalAlignment(), DNAseq, cluster.ref, affinegap)
@@ -284,8 +290,8 @@ function main()
         gap_extend=-1
     )
     
-    ## trim and count the reads.
-    illumina_reads_df = TrimAndCountReads(fastq_gz_reads_dir)
+    ## trim and count all the fastq.gz reads in the directory.
+    illumina_reads_df = TrimAndCountAllReads(fastq_gz_reads_dir)
     
     ## cluster the reads.
     ## This function takes about 45 seconds for one sample.
