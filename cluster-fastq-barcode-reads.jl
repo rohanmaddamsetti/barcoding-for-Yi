@@ -220,7 +220,7 @@ function WriteAlignedClustersToFile(clusters_per_sample, reference_fasta_paths, 
         reader = open(FASTA.Reader, ref_fasta_file)
         for record in reader
             record_name = FASTA.identifier(record) * "_" * FASTA.description(record)
-            refseq = sequence(record)
+            refseq = FASTA.sequence(LongDNA{4}, record)
             ## now, align each read to the current reference.
             for (sample, clusters) in clusters_per_sample
                 for cluster in clusters
